@@ -1,87 +1,56 @@
 
 <?php
 
-use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
-use Illuminate\Support\Facades\Validator;
 
-// PERTEMUAN 2: LATIHAN PHP
-Route::get('/latihan-php', function () {
-    $nama = 'Arif Himawan Aulady';
-    $nilai = [60, 65, 70, 55, 50];
+Route::get('/mahasiswa/{nim?}', function (?string $nim = null) {
+    try {
+        // Membuat koneksi PDO melalui konfigurasi Laravel
+        $pdo = DB::connection()->getPdo();
 
-    $hitungRataRata = function (array $data): float {
-        $total = 0;
+        // Query untuk mengambil data mahasiswa dan program studi
+        $sql = 'SELECT m.nim, m.nama, m.email, m.usia,
+                       p.nama_prodi
+                FROM mahasiswa AS m
+                JOIN program_studi AS p
+                    ON p.id = m.program_studi_id';
 
-        foreach ($data as $angka) {
-            $total += $angka;
+        // Jika NIM diberikan, tambahkan filter
+        if ($nim !== null) {
+            $sql .= ' WHERE m.nim = :nim';
         }
 
-        return $total / count($data);
-    };
+        // Mengurutkan data berdasarkan NIM
+        $sql .= ' ORDER BY m.nim';
 
-    $ratarata = $hitungRataRata($nilai);
+        // Menyiapkan query menggunakan prepared statement
+        $statement = $pdo->prepare($sql);
 
-    if ($ratarata >= 75) {
-        $status = 'Lulus';
-    } else {
-        $status = 'Perlu Perbaikan';
+        // Menjalankan query dan mengikat parameter NIM
+        $statement->execute(
+            $nim !== null ? ['nim' => $nim] : []
+        );
+
+        // Mengambil seluruh hasil dalam bentuk array asosiatif
+        $daftarMahasiswa = $statement->fetchAll(
+            \PDO::FETCH_ASSOC
+        );
+
+        // Mengirim data ke tampilan Blade
+        return view(
+            'mahasiswa',
+            compact('daftarMahasiswa', 'nim')
+        );
+
+    } catch (\Throwable $error) {
+        // Menyimpan rincian error di log Laravel
+        report($error);
+
+        // Menampilkan pesan aman kepada pengguna
+        return response(
+            'Koneksi atau query basis data gagal. Periksa file .env dan layanan MySQL.',
+            500
+        );
     }
-
-    return view('latihan-php', compact(
-        'nama', 'nilai', 'ratarata', 'status'
-    ));
-});
-
-// PERTEMUAN 3: FORM MAHASISWA
-Route::get('/form-mahasiswa', function () {
-    return view('form-mahasiswa');
-});
-
-Route::post('/form-mahasiswa', function (Request $request) {
-    // Sanitasi input sebelum validasi
-    $dataBersih = [
-        'nim' => trim((string) $request->input('nim')),
-        'nama' => strip_tags(
-            trim((string) $request->input('nama'))
-        ),
-        'email' => filter_var(
-            (string) $request->input('email'),
-            FILTER_SANITIZE_EMAIL
-        ),
-        'usia' => trim((string) $request->input('usia')),
-    ];
-
-    // Validasi data di server Laravel
-    $validator = Validator::make($dataBersih, [
-        'nim' => [
-            'required',
-            'regex:/^[0-9]{8,12}$/',
-        ],
-        'nama' => ['required', 'min:3', 'max:50'],
-        'email' => ['required', 'email'],
-        'usia' => ['required', 'integer', 'min:17', 'max:60'],
-    ], [
-        'nim.required' => 'NIM wajib diisi.',
-        'nim.regex' => 'NIM harus terdiri dari 8–12 digit angka.',
-        'nama.required' => 'Nama wajib diisi.',
-        'nama.min' => 'Nama minimal 3 karakter.',
-        'email.required' => 'Email wajib diisi.',
-        'email.email' => 'Format email tidak valid.',
-        'usia.required' => 'Usia wajib diisi.',
-        'usia.integer' => 'Usia harus berupa angka.',
-        'usia.min' => 'Usia minimal 17 tahun.',
-        'usia.max' => 'Usia maksimal 60 tahun.',
-    ]);
-
-    if ($validator->fails()) {
-        return redirect('/form-mahasiswa')
-            ->withErrors($validator)
-            ->withInput();
-    }
-
-    $data = $validator->validated();
-    $data['usia'] = (int) $data['usia'];
-
-    return view('hasil-form', ['data' => $data]);
 });
