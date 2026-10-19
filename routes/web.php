@@ -1,56 +1,139 @@
 
 <?php
 
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/mahasiswa/{nim?}', function (?string $nim = null) {
+// READ: menampilkan data mahasiswa dan program studi
+Route::get('/mahasiswa', function () {
     try {
-        // Membuat koneksi PDO melalui konfigurasi Laravel
         $pdo = DB::connection()->getPdo();
 
-        // Query untuk mengambil data mahasiswa dan program studi
-        $sql = 'SELECT m.nim, m.nama, m.email, m.usia,
-                       p.nama_prodi
-                FROM mahasiswa AS m
-                JOIN program_studi AS p
-                    ON p.id = m.program_studi_id';
-
-        // Jika NIM diberikan, tambahkan filter
-        if ($nim !== null) {
-            $sql .= ' WHERE m.nim = :nim';
-        }
-
-        // Mengurutkan data berdasarkan NIM
-        $sql .= ' ORDER BY m.nim';
-
-        // Menyiapkan query menggunakan prepared statement
-        $statement = $pdo->prepare($sql);
-
-        // Menjalankan query dan mengikat parameter NIM
-        $statement->execute(
-            $nim !== null ? ['nim' => $nim] : []
+        $pernyataanMahasiswa = $pdo->prepare(
+            'SELECT m.nim, m.nama, m.email, m.usia,
+                    p.nama_prodi
+             FROM mahasiswa AS m
+             JOIN program_studi AS p
+                ON p.id = m.program_studi_id
+             ORDER BY m.nim'
         );
 
-        // Mengambil seluruh hasil dalam bentuk array asosiatif
-        $daftarMahasiswa = $statement->fetchAll(
-            \PDO::FETCH_ASSOC
+        $pernyataanMahasiswa->execute();
+
+        $daftarMahasiswa = $pernyataanMahasiswa->fetchAll(
+            PDO::FETCH_ASSOC
         );
 
-        // Mengirim data ke tampilan Blade
-        return view(
-            'mahasiswa',
-            compact('daftarMahasiswa', 'nim')
+        $pernyataanProdi = $pdo->prepare(
+            'SELECT id, nama_prodi
+             FROM program_studi
+             ORDER BY nama_prodi'
         );
 
+        $pernyataanProdi->execute();
+
+        $daftarProgramStudi = $pernyataanProdi->fetchAll(
+            PDO::FETCH_ASSOC
+        );
+
+        return view('mahasiswa', compact(
+            'daftarMahasiswa',
+            'daftarProgramStudi'
+        ));
     } catch (\Throwable $error) {
-        // Menyimpan rincian error di log Laravel
         report($error);
 
-        // Menampilkan pesan aman kepada pengguna
         return response(
-            'Koneksi atau query basis data gagal. Periksa file .env dan layanan MySQL.',
+            'Data tidak dapat dibaca. Periksa koneksi dan query.',
             500
         );
     }
-});
+})->name('mahasiswa.index');
+
+
+// CREATE: memvalidasi dan menyimpan data mahasiswa
+Route::post('/mahasiswa', function (Request $request) {
+    $data = $request->validate([
+        'nim' => ['required', 'string', 'max:20'],
+        'nama' => ['required', 'string', 'max:100'],
+        'email' => ['required', 'email', 'max:100'],
+        'usia' => ['required', 'integer', 'min:15', 'max:100'],
+        'program_studi_id' => ['required', 'integer'],
+    ], [
+        'nim.required' => 'NIM wajib diisi.',
+        'nama.required' => 'Nama wajib diisi.',
+        'email.required' => 'Email wajib diisi.',
+        'email.email' => 'Format email tidak valid.',
+        'usia.required' => 'Usia wajib diisi.',
+        'usia.integer' => 'Usia harus berupa angka.',
+        'program_studi_id.required' =>
+            'Program studi wajib dipilih.',
+    ]);
+
+    try {
+        $pdo = DB::connection()->getPdo();
+
+        // Pastikan program studi benar-benar tersedia
+        $cekProdi = $pdo->prepare(
+            'SELECT COUNT(*) FROM program_studi WHERE id = :id'
+        );
+
+        $cekProdi->execute([
+            'id' => $data['program_studi_id'],
+        ]);
+
+        if ((int) $cekProdi->fetchColumn() === 0) {
+            return back()->withInput()->with(
+                'gagal',
+                'Program studi yang dipilih tidak tersedia.'
+            );
+        }
+
+        // Periksa NIM dan email duplikat
+        $cekDuplikat = $pdo->prepare(
+            'SELECT COUNT(*) FROM mahasiswa
+             WHERE nim = :nim OR email = :email'
+        );
+
+        $cekDuplikat->execute([
+            'nim' => $data['nim'],
+            'email' => $data['email'],
+        ]);
+
+        if ((int) $cekDuplikat->fetchColumn() > 0) {
+            return back()->withInput()->with(
+                'gagal',
+                'NIM atau email sudah digunakan.'
+            );
+        }
+
+        // Simpan data menggunakan prepared statement
+        $simpan = $pdo->prepare(
+            'INSERT INTO mahasiswa
+             (nim, nama, email, usia, program_studi_id)
+             VALUES
+             (:nim, :nama, :email, :usia, :program_studi_id)'
+        );
+
+        $simpan->execute([
+            'nim' => $data['nim'],
+            'nama' => $data['nama'],
+            'email' => $data['email'],
+            'usia' => $data['usia'],
+            'program_studi_id' => $data['program_studi_id'],
+        ]);
+
+        return redirect()->route('mahasiswa.index')->with(
+            'berhasil',
+            'Data mahasiswa berhasil ditambahkan.'
+        );
+    } catch (\Throwable $error) {
+        report($error);
+
+        return back()->withInput()->with(
+            'gagal',
+            'Data gagal disimpan. Periksa koneksi dan data.'
+        );
+    }
+})->name('mahasiswa.store');
